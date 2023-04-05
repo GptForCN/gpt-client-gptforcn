@@ -4,22 +4,24 @@ import com.example.demo.constants.OpenAiModels;
 import com.example.demo.util.SHA256HashingUtil;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.theokanning.openai.completion.CompletionChoice;
+import com.theokanning.openai.completion.CompletionChunk;
 import com.theokanning.openai.completion.CompletionRequest;
 import com.theokanning.openai.completion.CompletionResult;
-import com.theokanning.openai.completion.chat.ChatCompletionRequest;
-import com.theokanning.openai.completion.chat.ChatCompletionResult;
-import com.theokanning.openai.completion.chat.ChatMessage;
+import com.theokanning.openai.completion.chat.*;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Test;
+import org.junit.platform.commons.util.StringUtils;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.MediaType;
+import org.springframework.http.*;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestTemplate;
 
-import java.net.InetSocketAddress;
-import java.net.Proxy;
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.net.*;
+import java.nio.charset.StandardCharsets;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.List;
@@ -32,6 +34,7 @@ class DemoApplicationTests {
 
 	String appId = "YOUR APPID";
 	String appSecret = "YOUR APPSECRET";
+
 	String ENDPOINT = "https://node1.gptforcn.com";
 
 	String URL_TEST = ENDPOINT + "/v1/test";
@@ -91,6 +94,124 @@ class DemoApplicationTests {
 		ObjectMapper objectMapper = new ObjectMapper();
 		CompletionResult result = objectMapper.readValue(response, CompletionResult.class);
 		assertNotNull(result);
+	}
+
+	@Test
+	void testCompletionStream() throws Exception {
+		CompletionRequest completionRequest = CompletionRequest.builder()
+				.prompt("墨尔本是哪里")
+				.maxTokens(100)
+				.model(OpenAiModels.CURIE)
+				.temperature(0.5)
+				.build();
+
+		URL url = new URL(URL_COMPLETION);
+
+		ObjectMapper mapper = new ObjectMapper();
+		String data = mapper.writeValueAsString(completionRequest);
+		long timestamp = System.currentTimeMillis()/1000;
+		//校验签名 拼接请求内容按照字母排序进行sha256签名
+		String unSignStr = "appId=" + appId + "&appSecret=" + appSecret + "&data=" + data + "&timestamp=" + timestamp;
+		log.info("等待签名数据: " + unSignStr);
+		String sign = SHA256HashingUtil.sha256Hash(unSignStr);
+		log.info("签名: " + sign);
+
+		HttpURLConnection connection = (HttpURLConnection)url.openConnection();
+		connection.setRequestMethod("POST");
+		connection.setRequestProperty("Accept", "text/event-stream");
+		connection.setRequestProperty("content-type", "application/json; charset=UTF-8");
+		connection.setRequestProperty("appId", appId);
+		connection.setRequestProperty("timestamp", timestamp + "");
+		connection.setRequestProperty("sign", sign);
+
+		connection.setDoOutput(true);
+
+		// Send POST request
+		connection.getOutputStream().write(data.getBytes(StandardCharsets.UTF_8));
+
+		// Read server response
+		InputStream inputStream = connection.getInputStream();
+		BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
+		String line;
+		StringBuilder content = new StringBuilder();
+		while ((line = reader.readLine()) != null) {
+			// Process server response
+			if (StringUtils.isNotBlank(line)){
+				CompletionChunk completionChunk = mapper.readValue(line, CompletionChunk.class);
+				for (CompletionChoice choice : completionChunk.getChoices()) {
+					if (choice.getText() != null){
+						content.append(choice.getText());
+					}
+				}
+			}
+			log.info(line);
+		}
+
+		log.info(content.toString());
+		// Close connections
+		reader.close();
+		inputStream.close();
+		connection.disconnect();
+	}
+
+	@Test
+	void testChatCompletionStream() throws Exception {
+		List<ChatMessage> messages = new ArrayList<>();
+		messages.add(new ChatMessage("user", "介绍下上海"));
+		ChatCompletionRequest chatCompletionRequest = ChatCompletionRequest.builder()
+				.messages(messages)
+				.maxTokens(1000)
+				.model(OpenAiModels.GPT_3_5)
+				.temperature(0.5)
+				.build();
+
+		URL url = new URL(URL_CHAT_COMPLETION);
+
+		ObjectMapper mapper = new ObjectMapper();
+		String data = mapper.writeValueAsString(chatCompletionRequest);
+		long timestamp = System.currentTimeMillis()/1000;
+		//校验签名 拼接请求内容按照字母排序进行sha256签名
+		String unSignStr = "appId=" + appId + "&appSecret=" + appSecret + "&data=" + data + "&timestamp=" + timestamp;
+		log.info("等待签名数据: " + unSignStr);
+		String sign = SHA256HashingUtil.sha256Hash(unSignStr);
+		log.info("签名: " + sign);
+
+		HttpURLConnection connection = (HttpURLConnection)url.openConnection();
+		connection.setRequestMethod("POST");
+		connection.setRequestProperty("Accept", "text/event-stream");
+		connection.setRequestProperty("content-type", "application/json; charset=UTF-8");
+		connection.setRequestProperty("appId", appId);
+		connection.setRequestProperty("timestamp", timestamp + "");
+		connection.setRequestProperty("sign", sign);
+
+		connection.setDoOutput(true);
+
+		// Send POST request
+		connection.getOutputStream().write(data.getBytes(StandardCharsets.UTF_8));
+
+		// Read server response
+		InputStream inputStream = connection.getInputStream();
+		BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
+		String line;
+		StringBuilder content = new StringBuilder();
+		while ((line = reader.readLine()) != null) {
+			// Process server response
+			if (StringUtils.isNotBlank(line)){
+				ChatCompletionChunk chatCompletionChunk = mapper.readValue(line, ChatCompletionChunk.class);
+				for (ChatCompletionChoice choice : chatCompletionChunk.getChoices()) {
+					if (choice.getMessage().getContent() != null){
+						content.append(choice.getMessage().getContent());
+					}
+				}
+			}
+			log.info(line);
+		}
+
+		log.info(content.toString());
+		// Close connections
+		reader.close();
+		inputStream.close();
+		connection.disconnect();
 	}
 
 	/**
